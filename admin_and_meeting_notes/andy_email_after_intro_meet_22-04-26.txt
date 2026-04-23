@@ -1,0 +1,94 @@
+Thanks all: an epic meeting that went beyond scope of a seedless intro! I love it and thank you :) Apologies Stephan to your daughter who had to drag Daddy away from his computer to force him to have dinner.
+
+This is going to be a fun project. We’ve got a big team, there’s loads to do. I’m not sure the best way to get through it all, so I suppose that’s something we’ll figure out as we go.
+
+All are welcome, anyone interested in working on bits and pieces associated with assignments. The primary output here will be a GUI that works with topspin where there are some options that let a user select a set of triple resonance experiments and have them run with seedless pulses, in a way we collectively consider optimal. Downstream of that we will (eventually) have some processing, reconstruction and analysis tools. There’s a lot to do, but we have a good team, so please all feel free to pitch in. 
+
+Flemming, Charlie and I have talked about putting in for some kind of funding to support this, which we should probably do. Even though we’re going to do this anyway, simply because its fun.
+
+
+Just to try and keep things managed and to sum things up from today:
+
+I’ve made a GitHub account https://github.com/ajb204/NMRAssign . Send me your Github IDs and I’ll add anyone interested. This will be a good dumping ground for pulse sequences, files and drafts. 
+
+Immediate teething problems: 
+
+1. Windows install is screwing up, Suzanne to talk with Tammo about that, and for Suzanne to work with Andy to update the seedless install instructions to make sure they have up to date points for windows.
+2. Flemming and Andy to take a look at why his Mac is refusing to run Andy’s binary. 
+3. Eiso and Andy to play with the CentOS compile to get a ‘bare bones linux’ compilation that’s static and portable. Eiso to send Andy his binary for him to test.
+
+
+Then we have I think 4 major things to do/think about, all input is welcome:
+
+1. Test/calibration suite: 
+What is the test suite that provides a user the direction for what settings to run? And how do we figure out this list. 
+To do: we all populate a document with opinions to try and capture the complexity of the decision making surface that we act on.
+How much of our decision making leads to improvements, and how much of it is us simply wallowing in our heads and giving us an excuse to think about NMR?
+On the list is already:
+A) B1 calibrations of proton + heteronuclear. We have this already automated, and is essential for the seedless method more generally.  It would be good for Hugo/Flemming/Tammo to test our calibration method to help work out whether it’s robust enough. This is via Abi’s ’spinCycle’ project.
+B) O1. This we’ve already done also. 
+C) D1 calibration: Tammo already has a d1 test, and Stephan uses it so this is one dimension that benefits from a test.
+D) Gradients: A quick test to make sure gradients aren’t buggered up is probably a good idea.
+E) comparison of water suppression modes?  They are all modular so any sequence coming from 2. Can have a drop down list to pick and choose from these.
+
+We need to figure out how many tests we think are reasonable to figure out if our spectrometers are working properly and to determine the parameters for the pulse sequences going forward.
+
+It will be fun to make a super-set list of everything someone CAN worry about when setting up triple resonance, so we can work on the list to figure out internally of the things we CAN worry about, SHOULD we worry about them. And how much.  And for how long. 
+
+F) How do we intelligently pick sweep widths, acquisition times, number of transients, and NUS schedule?
+We have a combination of 
+i) clever “method XXX will be optimal because” and 
+ii) “well this is simply what we do, and we’ve done it so much it can’t be wrong” and 
+iii) “is it possible to over-worry about this sort of thing?”.
+
+
+2. Which pulse sequences should we work on?
+Going forward, having on the GitHub a set of ’Seedless’ sequences is a good idea anyway. So each time we convert a sequences, we make a seedless version. We need to nail down the convention for this, which will basically be 
+A) make a seedless input script that computes all the necessary pulses
+B) make a mapping file that directs some python or other controller (ultimately this will be spinCycle, our python GUI) to know how to map the pulse sequences from seedless, to spnam1, spnam2 and so on in the pulse sequence.
+
+The list will include for assignment, at a minimum the HNCO/HNCACO pair, the HNCA/HNCOCA pair, a CACB pair and an HN/HN pair.
+
+Tammo’s sequences are a great place to work from, as discussed. Note that the Seedless methods means that in places we can simplify how we implement sequences. 
+
+Suzanne will work with Ben, Tammo, Jack and Abi initially to get some ideas prototyped and setup. We can then all slowly start to populate our GitHub account that houses the ‘functional'
+
+3. How do we handle the different topspin versions?
+We don’t. We make instead in the python command and control (spinCycle) able to ‘create’ pulse sequences from our library. The major issues are things like different versions handling includes and syntax differently. But: for any sequence, we are able to make use of the various delays, and we know how they should be set. We create a metaData file that is human readable, that has a series of statements like:
+d8 = d3 + 5us - 0.5 p5
+Where the inputs could be variables like pulse lengths, and the API will set the parameter file without the need to worry about things like specific syntax at a specific spectrometer. 
+This needs a nice implementation. Not hard to do, we can make this work when we have a test case of 5 or 6 pulse sequences to work with coming from 2. 
+
+In this we can have modular construction if we’re clever about it to COMPLETELY avoid ZG flags. For example. The water suppression just before direct detection can be completely modular, W5, 3:9:19, simple soft/hard/soft Watergate, perfect echo, whatever…. These don’t need a phase cycle, can can be selected from a drop down menu.
+
+I’m describing then a pulse compiler that will create a bespoke pulse sequence from the body of the pulse sequence taken from a text file, and join it with a finite number of options like end water suppression, perhaps CT versus nonCT for 15N, that sort of thing. This crated pulse sequence is placed in a new experiment, the parameters are set in the parameter file, and the thing can be run. We have the structure of a program that can do all this (spinCycle), we need to polish it up and make it work nice and robustly.  The principle is having the program make as many of the decisions as possible, so we only rely on topspin for zg. It is simply not trusted to do anything else because of version control issues that plague our field.
+
+As a nice aside, I will wire this up to our simulation software, so you get to simulate the experiments at the same time as setting them up.
+
+
+4. Order of acquisition.
+We’ve got some fun arguments to have here. This question is multidimensional. There’s the very pragmatic:
+“What is the normal order I like to acquire these, and why”.
+This includes issues like EIso’s preferred order for information content, and is subject to the particular skill of the person doing the end analysis. Stephan’s point that in practise we jumble this in to fit around the fill is well taken, and of course we do. The: “Shit it’s late, which one can I get going now and come back tomorrow”.  So it’s possible order isn’t that important.
+
+Sample degradation is a key point:
+Is it better to completely acquire a subset of spectra with complete signal intensity, or spread the bet around many spectra, where if you later find you’re degrading or aggregating mean that you end up with nothing? This has a strong Zobio lean, but is of course a very fair point. If testing the sample is stable takes longer than you have, why would you. And in 2026, who has time for anything? 
+
+At a minimum we probably want the spectral pairs done in pairs so we guarantee the alignment of peaks in the comparison. So HNCA HNCOCA are done at the same time to guarantee the same chemical shift dimensions, same with HNCO/HNCACO and so on.
+
+
+Then we’ve got some spin physics:
+“Is there a complementary order in which I can run individual FIDs to maximise net signal"
+Tricks there include Tammo’s qTROSY and ‘afterglow’ type ideas, if we can have two orthogonal magnetisation pathways running at once, we can get more or less two FIDs at the same time, or immediately sequentially. We could imagine putting two samples with different labelling schemes in at the same time, and literally doing two independent experiments at the same time, which would be another form of parallelisation. 
+
+5. What happens after the spectra?
+We have a nice GUI already made and a peak picker which we should wire up. Flemming correctly notes that non-uniform reconstruction and peak picking are really the same problem. So do we need a peak picker? I think probably yes, and we have one, Flemming will probably argue no, this is an AI problem. So lets try both. So we have an intelligent processing platform that delivers processed spectra, that ideally is peak picked or close to. 
+
+We can then fire that information into various assignment software. We have a nice package that visualises the triple resonance spectra and shows the ‘walk’, we can plug that into anyones favourite auto assigner. We want probably semi-automatic: tools that help make quick decisions for a user, but let a user go straight to the ’trouble spots’ where things are overlapped, less clear, and require some holistic analysis by an expert to figure out WTF. In a best case, we can figure out algorithmically some rules to unpick these situations, in a worst case, simply letting a user decide how to un-knot areas of the assignment by clicking is really not a bad way to do things.
+
+
+I think those are the major points. We have also answered the question ‘how many hours do a bunch of spectroscopists need to think about triple resonance experiments in an initial meeting’. The answer is 5. And people say NMR folk have no passion! 
+
+Cheers all!
+
+Andy.

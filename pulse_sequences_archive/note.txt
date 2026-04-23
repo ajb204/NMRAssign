@@ -1,0 +1,1 @@
+folder in which to put the pulse sequences we're looking at, will populate after lunch

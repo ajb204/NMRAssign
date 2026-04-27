@@ -1,0 +1,559 @@
+;tdHNCA.btr			td 19/02/2026
+
+;### AVANCE version adapted for TopSpin 4.2 and cryo-probe ###
+;3D HNCA BEST-TROSY: (N,CA)-SQC version, also covers sidechains:
+;	              HNCB/G(Asn/Gln), HNECD(Arg), HND1CB(His)
+;NOTE: uses HN band-selective excitation => losses for HN close to water (< 6ppm)
+
+;OPTIONS: 
+;- 'l1' for 2H decoupling during t2(CA): 0=off, 1=on 
+;  ## NOTE: if l1 = 1, residual 13C[1H] isotopomers get suppressed! ##
+;- 'l2' for constant t2(CA) time: 0=off, 1=on (then, ct2 = d6)
+;  ## NOTE: ct2(CA) preferably for deuterated samples with 2H decoupling (l1=1)
+;  ##       ct2(CA) = d6 ~ 27ms (deuterated samples), ~ 22ms (non-deuterated)
+;  ##       When using ct2(CA), make sure to set TD2 < TD2max(from ased)!
+;- 'zgoptns' (choose one only!!!):
+;  -DHreadout = test: read-out flipped-back 1H polarisation
+;  -Dd1opt    = test: find optimal total interscan delay d1
+;  -Dd5opt    = test: find optimal N->CA transfer delay d5
+;- CLEAN-TROSY options to reduce cross-talk semi-TROSY artefacts:
+;  -> in F1: REDUCE d14 (< d4, CHECK: d14c > 0) for LESS NEGATIVE F1 anti-TROSY signals 
+;  -> in F2: INCREASE phcor10 for LESS POSITIVE F2 anti-TROSY residuals
+;  Lit: T.Schulte-Herbrueggen & O.W.Sorensen, JMR 144, 123-128 (2000)
+
+;FEATURES:
+;- band-selective HN excitation leaves H2O and Haliph unperturbed
+;- adds natural 15N polarisation: Pervushin et al, JBNMR 12, 345 (1998)
+;- adds hyperpolarised Nz (from axial Hz recovery): Favier & Brutscher, JBNMR 49, 19 (2011)
+;- 180deg BIP pulses for optimal B1 tolerance: Smith et al, JMR 151, 269 (2001)
+;- full JNCA evolution during ST2-PT
+;- 1H decoupling during t2(CA) for use also with non-deuterated samples
+;- automatically selects constant or semi-constant t1(15N) according to chosen TD1
+
+;############################ IMPORTANT NOTES ###############################
+;*) Implements BAND-SELECTIVE HN EXCITATION, therefore:
+;-> O1P MUST BE SET TO CENTER OF HN to minimise excitation losses for HN
+;   close to water (below 6 ppm) or at high ppm (above 11 ppm)!
+;*) DIGMOD = BASEOPT ##
+;*) TD1(15N) may be chosen freely. For TD1 > TD1max (shown in 'ased'), F1(15N) is
+;   implemented as semi-constant time. Otherwise, constant t1(15N) is employed.
+;*) TD2,max(13CA) <= TD2max (shown in 'ased') only needed for constant F2 time (l2=1)
+;*) D5 (N->CA transfer delay): ~ 12.5m <= 1/4J(NCA)
+;   if focus lies on INTRAresidual correlation via 1J(NCA): D5 ~ 16m
+;   if focus lies on INTERresidual correlation via 2J(NCA):
+;   - if protein is largely b-sheet: D5 ~ 18m
+;   - if protein is largely helical: D5 ~ 25m
+;   - if both, or unfolded:          D5 ~ 22m
+;*) AQ is not limited by sample heating (no 15N decoupling!), but should be
+;   rather short (AQ =< 300ms) to optimise intensities!
+;*) 15N offset o3p: use SAME as for (fold-optimised) HSQC since
+;   0.5*J(HN)=45Hz are automatically added in F1 (15N)!
+
+;##### Setup zgoptns = -Dd1opt: d1 optimisation #####
+;For zgoptns = -Dd1opt to define optimal total interscan delay d1:
+;- Set TD2 = 1 and TD1 = SI1 = 16, FnMODE (MC2) = QF, DS=2
+;- Process with 'xf2' and derive optimal d1 from ROW NUMBER with maximal intensity:
+;   - rows 1-16 correspond to the following total interscan delay d1 [ms]:
+;       1=5000,  2=3200,  3=2222,  4=1633,  5=1250,  6=988,  7=800,  8=661
+;       9= 556, 10= 473, 11= 408, 12= 356, 13= 313, 14=277, 15=247, 16=222
+
+;##### Setup zgoptns = -Dd5opt: d5 optimisation #####
+;For zgoptns = -Dd5opt to define optimal N->CA transfer delay d5:
+;- Set TD2 = 1 and arbitrary TD1 = SI1, FnMODE (MC2) = QF
+;- Process with 'xf2' and derive optimal d5 from ROW NUMBER with maximal intensity:
+;  => d5opt = 6m + 0.5m * (ROW NUMBER - 1)
+
+;############### Acquisition & Processing Info ##############################
+;Dimension:       FnMODE        REVERSE   FCOR    PHC0    PHC1  MEmod
+;F2(13CA) l2=0:  States-TPPI     FALSE    1.0      90     -180   LPfr
+;  (ct2:) l2=1:  States-TPPI     TRUE     0.5       0       0    LPmifr 
+;F1(15N)         echo/antiecho   TRUE     0.5      90       0    LPmifc
+;SR for SAME shifts as in HSQC:   SR(15N) = 0Hz and SR(1H) = -45Hz
+;NOTE: in F2 TPPI or States-TPPI can be used, depending on desired folding scheme!
+;(States is not recommended as axial peaks will appear at central offset) 
+;F3: For residual water suppression try bcmod = 'qpol' with 'coroffs' = cnst11
+;    If resulting baseline distortion is inacceptable, stick to bcmod = 'quad'
+
+;########################## INTERPRETATION ##############################
+;- for non-constant t2 (l2=0), CA signals with odd-numbered folding in F2 appear inverted
+;- for constant t2 (l2=1), glycine-CA appear inverted with respect to all other CA  
+
+;##################### Parameter Set-up ("ased") #################################
+;ns = ## multiple of 4 ##
+;ds >= 256 (for temperature equilibration)
+;sfo1 = ## center of HN (~8.4ppm) ##
+;sfo2 = ## center of CA (~53ppm) ##
+;sfo3 = center of N (O3p~120ppm)
+;sfo4 = 2H: center of HA (~ 4.5ppm)
+;---------- OPTIONS ----------
+;zgoptns = -DHreadout, -Dd1opt, -Dd5opt
+;l1 = 2H decoupling: 0(off), 1(on)
+;l2 = constant t2(CA) time: 0(off),1(on)
+;---------- 1H pulses ----------
+;p1 = 90deg high power pulse @ pl1 (reference)
+;pl1 = for p1=90deg on 1H (high power)
+;p2 <= 200us*600/BF1 (power check on sp2!)
+;spnam2 = ### BIP_720_(50 or 75).. ###
+;spnam21 = ### PC9_4 ###
+;spnam22 = ### ReBurp ###
+;p19 >= 2ms 90deg flip-back pulse on H2O
+;spnam19 = ### Gauss1 (1% truncation) ###
+;---------- 13C pulses ----------
+;p3 = high-power 90deg on C @ pl2 (reference)
+;pl2 = for p3=90deg on C (high power)
+;p6 ~ 400u*1000/BF1 180deg on CO (@sp6)
+;spnam6 = ### SURBOP180 ###
+;p14 ~ 400*1000/BF1 180deg on CA&CBG(Asn/Gln)
+;spnam14 = ### SURBOP ###
+;p26 ~ 80us*1000/BF1 CO decoupler @ sp26 (CHECK with spnam26!!!)
+;spnam26 = ## cos-mod. Gauss10% (by 'spoffs6' Hz) of duration = p26 ##
+;---------- 15N pulses ----------
+;p7 = 90deg high power pulse @ pl3 (reference)
+;pl3 = for p7=90deg on 15N (high power)
+;p8 <= 270us*1000/BF1 (power check on sp8!)
+;spnam8 = ### BIP_540_75_15 ###
+;p18 <= 480us*1000/BF1 AND > p26 !!!
+;spnam18 = ### BIP_720_100_10 ###
+;---------- 2H pulses ----------
+;pcpd4 = p9 !!!
+;p9 ~ 250u 90deg 2H dec. pulse (@ pl4)
+;pl4 = for p9 = 90deg
+;cpdprg4 = ### waltz16.p9 ###
+;---------- DELAYS ----------
+;d1 <= 1.25*T1(HN) (total interscan recovery delay)
+;d2 ~ 6.4 - 7.1 ms (~ 1/4JCACB)
+;d4 ~ 2.2-2.5m (J evolution on H(N))
+;d5 ~ 13.5m (< 1/4JNCa) = CT/2 in t1(N)
+;d6 ~ 27m (<= 1/JCBCx) = ct2(CA)
+;d14 ~ 2m (suppress F1(N) anti-TROSY, check d14c!)
+;d10 = irrelevant (set automatically)
+;d20 = irrelevant (set automatically)
+;d16 >= 50u (gradient recovery delay)
+;d19 ~ 1-1.5*DW (echo delay in W5 pulse)
+;d38 = PRE-experiment waiting time (for AUTOSHIM)
+;d39 = POST-experiment waiting time (for cool-down prior to TOPSHIM)
+;---------- gradients ----------
+;p16 >= 400us coherence-sel. gradient pulse
+;gpz1 ~ -60  (strong coh.sel. gradient)
+;gpx1 ~ gpz1/0.77
+;gpy1 ~ gpz1/0.77
+;gpnam1 = ### SMSQ10.50 ###
+;gpz2 ~ 7 (SMALL rad.damp. grad)
+;gpx2 = 0
+;gpy2 = 0
+;gpnam3 = ### SMSQ10.50 ###
+;gpz3 ~ -50 (MEDIUM WATERGATE gradient)
+;gpx3 = 0
+;gpy3 = 0
+;gpnam4 = ### SMSQ10.50 ###
+;gpz4 ~ 50 (MEDIUM z-spoil gradient)
+;gpx4 = 0
+;gpy4 = 0
+
+;### calculated parameters ###
+;$OWNER=nmr
+;$CLASS=HighRes
+;$DIM=3D
+#include <Grad.incl>
+#include <Avance.incl>
+#include <Delay.incl>
+#include <tdWG.incl>
+"cnst0=1000/trunc(bf1)"
+;--- 1H pulses ---
+#define H f1
+"if( o1/bf1 < 7.5 ) {cnst1=8.2*bf1;} else {cnst1=o1;}"  ;safety check 1H offset
+"cnst11=-cnst1+(4.7*bf1)"		;distance HN minus H2O
+"spnam2='BIP_720_50_20.1000'"
+"p2=120u*cnst0"
+"spoal2 = 0.5"
+"spoal2 = 0.5"
+"spoffs2=bf1*(5/1000000)-o1"
+"spw2=plw1*pow(p1*8/p2,2)"                ;for p2 = BIP_720_...
+"spnam21='Pc9_4_90.1000'"
+"p21=trunc(0.5-4670000/cnst11)"		;computed PC9_4 pulse to leave H2O untouched
+"cnst21=0.518"	;fraction of PC9 pulse with shift evolution
+"spoffs21=0"
+"spoal21=1"
+"spw21=plw1*pow(p1*8/p21,2)"		;for p21 = PC9_4 pulse
+"spnam22='Reburp.1000'"
+"p22=trunc(0.5-3520000/cnst11)"		;computed ReBurp pulse to leave H2O untouched
+"spoffs22=0"
+"spoal22=0.5"
+"spw22=plw1*pow(p1*25.06/p22,2)"		;for p22 = REBURP
+;--- 13C pulses ---
+#define C f2
+#define CA f2
+#define CO f2
+"spnam6='SURBOP180.1000'"
+"p6=400u*cnst0"                      ;SURBOP180 on CO(w)-Carom(HIS) (180u Q3 causes losses!)
+"spw6 = plw2*pow(p3*20/p6,2)"        ;for p6 = SURBOP180
+"spoal6 = 0.5"
+"spoffs6=(bf2*153/1000000)-o2"       ;shift to CO(w)-Carom(HIS)
+"spnam14='SURBOP180.1000'"
+"p14=400u*cnst0"                     ;SURBOP-180 on CA-CB(HIS) (240u Q3 causes losses!)
+"spw14 = plw2*pow(p3*20/p14,2)"      ;for p14 = SURBOP180
+"spoal14 = 0.5"
+"spoffs14=(bf2*40/1000000)-o2"            ;shift to CA-CB(HIS)
+"spoal26 = 0.5"
+"spoffs26=0"
+"spw26 = plw2*pow(p3*7.07965/p26,2)"     ;for p26 = cos.-mod. Gauss 10%
+;--- 15N pulses ---
+#define N f3
+"spnam8='BIP_540_75_15.1800'"
+"p8=270u*cnst0"
+"spoal8 = 0.5"
+"spoffs8=0"
+"spw8 = plw3*pow(p7*6/p8,2)"              ;for p8 = BIP_540_75_15
+"spnam18='BIP_720_100_10.1200'"
+"p18=480u*cnst0"
+"spoal18 = 0.5"
+"spoffs18=0"
+"spw18 = plw3*pow(p7*8/p18,2)"            ;for p18 = BIP_720_
+;--- 2H pulses ---
+#define D f4
+;--- gradients ---
+"cnst16=-(sfo3/sfo1)"		
+"gpnam1='SMSQ10.100'"
+"gpnam3='SMSQ10.100'"
+"gpnam4='SINE.100'"
+"p16=400u"
+"d16=100u"
+;--- delays ---
+define delay prompt
+define delay comp1
+define delay comp3
+define delay comp4
+define delay comp5
+define delay d1a
+define delay d1c
+define delay d4b
+define delay d4c
+define delay d14c
+define delay d12c
+define loopcounter TD1max
+define delay d6a
+define delay d6b
+define delay d10c
+define delay d20c
+define loopcounter TD2max
+"d11=30m"			  ;short delay for phase incrementation
+"d12=4u"			  ;short delay to separate shaped pulses
+"d21=p21/2"
+"comp1=p1*4/PI"
+"comp3=p7*4/PI"
+"comp4=p21*cnst21" ;chemical shift evolution during p21=PC9
+"comp5=d21-(p7+p8+d12*2)"
+"d4b=d4/2-d16-comp4"
+"d4c=d4+p8*2-p16-(p21+p22)/2"
+"d14c=max(d14-p16-(p21+p22)/2,d16)"
+;---- definitions for t1(15N) time ----
+"l13=0"                   	;manual t1 increment counter for E/A selection
+"d0=(d5-d14-p6)/2-(p16+d16+p21/2)+(p14+3*comp3)/4"
+"d22=d0+(p16+d16+p21/2)-comp3"
+"d23=0"
+"d24=d0+(p16+d16+p21/2)-comp3-p14"
+"TD1max=d22*8/inf1"
+"l23=trunc((td1-1)/TD1max)"
+if(l23)
+{;--- for semi-constant t1(N) time ---
+"in22=2*d22/(td1+2)"    ;decrement
+"in23=inf1/2-in22*2"
+"in24=in22"
+"in0=inf1/2-in22"
+}
+else
+{;---- for constant t1(N) time ---
+"in0=inf1/4"
+"in22=in0"               ;decrement
+"in23=0"
+"in24=in0"
+}
+;---- definitions for t2(CA) time ----
+"in10=inf2/4"
+"in20=inf2/4"
+"d6a=d6/2+p14"
+"d6b=d6/2"
+"d10=max(in10/2-p3/PI,0)"	;for 90/-180deg phase correction FCOR=1
+"d10c=larger(p18/2,p2+d10)-p3-d10*2"
+"d40=1u"
+"d20=d6/4-p6/2"           	;for constant t2 time
+"d20c=4u+(1.9m+(p6-p2)/2)*l1"   ;for dephasing Jcbhb during CT(t2)
+"TD2max=2*d20/in20"
+if(l2>0) 
+{
+"td2=tdmax(td2,2*d20,in20)"
+}
+#ifdef Hreadout
+;---- setup for flip-back read-out ----
+"l1=0"		;deactivate 2H decoupling for this option (causes LOCK problem)
+"d29=5u"
+"spnam19='Gaus1.1000'"
+"spoal19 = 1"
+"spoffs19= 0"
+"spw19 = plw1*pow(p1*2.44/p19,2)"  ;for p19 = Gauss1
+#endif
+#ifdef d5opt
+;---- setup for d5 optimisation ----
+  "l1=0"		    ;deactivate 2H decoupling
+  "l2=0"		    ;fix non-constant t2(13C)
+  "d10=0"
+  "in5=500u"    ;d5 increment
+  "inf1=in5"		;dummy increment ensures identical F1 scaling always
+  "in0=inf1"				
+  "d5=6m"       ;start value
+  "d0=(d5-d14-p6)/2-(p16+d16+p21/2)+(p14+3*comp3)/4"
+  "d22=d0+(p16+d16+p21/2)-comp3"
+  "d24=d0+(p16+d16+p21/2)-comp3-p14"
+#endif
+#ifdef d1opt
+;---- setup for d1 optimisation ----
+  "l1=0"        ;deactivate 2H decoupling
+  "inf1=4s"		  ;dummy increment ensures identical F1 scaling always
+  "in0=inf1"				
+  "d10=d12"
+  "l18=0"				;internal dummy scan counter
+  "ds=0"				;essential reset of dummy scan counter
+  "l9=16"			  ;incrementable scan counter
+  "l19=64/td1"	;in d1 opt: NS increment, 4(2) for td1=16(32)
+  "d1=5s"	    	;initial interscan delay
+  "d61=d1*l9*l9"	;duration per experiment
+#endif
+"d1a=(aq+d11+5m+p8)"	    ;overhead interscan delay
+"d1c=d1-d1a"						  ;residual interscan delay
+"prompt=10u+l1*1u+l2*1u+TD1max*1u+TD2max*1u"		;dummy delay
+"d12c=max((p21*(cnst21-0.5)+p8+d12*2-(p16+d16)),0)"
+"acqt0=min((p21*(cnst21-0.5)+p8+d12*2-(p16+d16)),0)-d12"
+
+ aqseq 312	
+  prompt
+  d38  ;optional initial waiting delay for autoshim
+  ze
+  if(l1)
+ {;### with 2H decoupling ###
+  1m LOCKDEC_ON		;lockswitch: allow for 2H decoupling
+  1m H2_PULSE			;lockswitch: switch to 2H pulsing
+  1m pl4:D
+ }
+  d1a fq=cnst1(bf):H
+  d1c fq=45:N
+2 d11
+3 d12
+  if(l1)
+ {;### with 2H decoupling ###
+  0.5m H2_LOCK			;lockswitch: switch to 2H locking
+  0.5m LOCKH_OFF		;BSMS: resume locking
+  (p8:sp8 ph0):N
+  d1c
+  0.5m LOCKH_ON			;BSMS: suspend locking (LOCKH_ON)
+  0.5m H2_PULSE			;lockswitch: switch to 2H pulsing
+ }
+ else
+ {
+  1m BLKGRAD
+  (p8:sp8 ph0):N
+  d1c
+  1m
+ } 
+  1m UNBLKGRAD		  ;BSMS: suspend locking (LOCKH_ON) and unblank gradient amplifier 
+  1.1mp:gp4         ;essential z-spoil prevents H2O break-through between scans 
+  1.9m
+;------ initial bandselective H->N INEPT: Do NOT change 1H phases to keep gN!!! --------
+  (p21:sp21 ph1):H
+  d4b gron2*0.7
+  d16 groff 
+  (center (p2:sp2 ph0):H (p8:sp8 ph0):N)
+  d4b gron2
+  d16 groff
+  comp4*2
+  d4b gron2*0.7
+  d16 groff 
+  (center (p2:sp2 ph0):H (p8:sp8 ph1):N)
+  d4b gron2
+  d16 groff pl3:N
+  (p21:sp21 ph2):H 	;ph2 to add Nz
+;------- end of INEPT, 2NzHz and Hu in -z --------
+;  0.8mp:gp4		;z-spoil optional, not required	
+;  0.2m 
+;------- TROSY coherence NyHa evolves JNCA -------
+  (p7 ph0):N       ;2NyHz			
+  d5*0.5
+  (p8:sp8 ph0):N
+  (p14:sp14 ph0):C
+  d5*0.5
+  comp3
+  d5*0.5
+  (p8:sp8 ph0):N
+  (p14:sp14 ph1):C
+  d5*0.5 pl2:CA pl3:N      ;4NxHzCAz
+  (p7 ph3):N 				;transfer off 15N
+;------- Transfer term: 2NzHaCAz ----
+ if(l1)
+ {;### with 2H decoupling ###
+  (p9 ph1):D     ;align 2H magnetisation for decoupling
+  (20u cpds4):D
+ }
+;------- t2 on 2NzHaCAx --
+  d12
+ if(l2)
+ {;### constant t2 with C,C multiplicity encoding, 1H suppression, CO decoupling ###
+  d12
+  (p3 ph5):CA
+  (d6a) (d20 p6:sp6 ph6 d20 p14:sp14 ph14):C (d20 p18:sp18 ph6):N (d20 p2:sp2 ph0):H
+  (d6b) (d20 p6:sp6 ph0 d12 pl2):CO (d20 p18:sp18 ph0):N (d20 d20c p2:sp2 ph1):H
+  (p3 ph0):CA
+ }
+ else
+ {;### non-constant t2 time with inversion of folded CA, [CO,1H,15N]-decoupled (NOT CGarom) ##
+  d12
+  if "d10*4 > p18"
+  {;--- normal t2 with CO decoupling ---
+   "d40=d10*2-p2"
+   d10c
+   (p3 ph5):CA
+   (center (d10*4) (d12 p26:sp26 ph6 d12 pl2):CO (p2:sp2 ph0 d40 p2:sp2 ph1):H (p18:sp18 ph6):N)
+   (p3 ph15):CA
+   d10c
+  }
+  else
+  {;--- initial t2 without CO decoupling ---
+   (center (p3 ph5 d10*4 p3 ph15):CA (p2:sp2 ph0):H (p18:sp18 ph6):N)
+   (p2:sp2 ph1):H		;CRITICAL compensation to swap back to TROSY 
+  }
+ d12				;BUG: required dummy delay between conditional jumps
+ }
+ d12
+ if(l1)
+ {;### with 2H decoupling ###
+  d12 do:D
+  (p9 ph3):D     ;flip-back 2H magnetisation
+ }
+  p16:gp4			;z-spoil
+  d16 pl3:N
+;------- t1 with TROSY coherence on 15N -------
+ if "l13 %2 == 0"
+ {;--- echo scan ---
+   (p7 ph7):N
+ }
+ else
+ {;--- antiecho scan ---
+   (p7 ph17):N
+ }
+  d22
+  (p6:sp6 ph0):CO
+  d22
+  (p8:sp8 ph0):N
+  d23
+  (p14:sp14 ph6):CA
+  d24
+  (p6:sp6 ph1):CO
+  d0
+  p16:gp1*EA
+  d16
+;------- bs-ST2-PT, first half with JNCA evolution, H2O in z -------
+  (p21:sp21 ph19):H
+  p16:gp3*0.7
+  d14c
+  (center (p22:sp22 ph1):H (p8:sp8 ph1):N (p14:sp14 ph2):C)
+  p16:gp3*0.7
+  d14c pl3:N
+  (p21:sp21 ph20):H (d21 p7 ph9 d12 p8:sp8 ph1):N
+  p16:gp3
+  d4c
+  (center (p22:sp22 ph1):H (p8:sp8 ph2):N)
+  p16:gp3
+  d4c pl3:N
+  comp5
+  (p7 ph10:r):N
+  p16:gp1*cnst16
+  d16
+  d12 BLKGRAMP
+  d12c
+
+#define DEFAULT
+#ifdef Hreadout
+#undef DEFAULT
+;### read out Hu magnetisation ###
+  1m fq=cnst11:H
+  d29 
+  d12 UNBLKGRAD
+  (p19:sp19 ph31+180):H                             ;water flip-back
+  d12 pl1:H
+  (p1 ph31):H
+  p16:gp3
+  d16
+  (W5):H
+  p16:gp3
+  d16
+  comp1*0.5
+  d12*2
+  p16:gp3
+  d16
+  (W5):H
+  p16:gp3
+  d16 fq=0:H
+  d12 BLKGRAMP1
+  go=2 ph31
+  d11 wr #0 if #0 zd 
+  "d29=d29+10s"
+  lo to 3 times 2                     	;increment uH recovery time
+#endif
+ 
+#ifdef d1opt
+#undef DEFAULT
+;### option: pseudo-2D for d1 optimisation ###
+  d12 iu18		;increase own dummy scan counter
+  if "l18 <= 4" goto 2	;skip acquisition for dummy scans
+  gosc ph31
+  lo to 2 times l9		;loop for current number of scans
+  d12 ru18
+  "l9=l9+l19"			;calculate new number of scans
+  "d1c=(d61/(l9*l9))-d1a"		;calculate next residual interscan delay
+  d11 wr #0 if #0 zd 
+  lo to 3 times td1 		;loop back to start of experiment 
+#endif
+
+#ifdef d5opt
+#undef DEFAULT
+;### option: pseudo-2D H[NCA] for d5 optimisation ###
+  go=2 ph31
+  d11 wr #0 if #0 zd 
+  d12 id5
+  "d0=(d5-d14-p6)/2-(p16+d16+p21/2)+(p14+3*comp3)/4"
+  "d22=d0+(p16+d16+p21/2)-comp3"
+  "d24=d0+(p16+d16+p21/2)-comp3-p14"
+  lo to 3 times td1 		;loop back to start of experiment 
+#endif
+
+#ifdef DEFAULT
+;### full 3D ###
+   go=2 ph31
+   d11 mc #0 to 2
+    F1EA(calgrad(EA) & calph(ph10,+180) & calph(ph20,+180) & calclc(l13,1), caldel(d0,in0) & caldel(d22,-in22) & caldel(d23,+in23) & caldel(d24,+in24) & calph(ph7,+180) & calph(ph17,+180) & calph(ph31,+180))
+    F2PH(calph(ph5,+90), caldel(d10,+in10) & caldel(d20,-in20))
+#endif
+  d12
+  if(l1)
+ {;### with 2H decoupling ###
+  1m H2_LOCK
+  1m LOCKH_OFF
+  1m LOCKDEC_OFF
+ }
+1m BLKGRAD
+d39
+exit
+   
+ph0 =0 
+ph1 =1
+ph2 =2
+ph3 =3	
+ph5 = 0 2         ;(CA): axial peak suppression in t2 (receiver follows) - IMPORTANT
+ph14 ={{0}*8}^1   ;(CA) rephasing pulse in t2 (receiver follows)	
+ph15= {{0}*8}^2   ;(CA & N) read phase after non-constant t2 (substitutes ph14)
+ph6 = {{0}*2}^2		;(C) decoupler pulses (no effect on receiver)
+ph7 = {{{{1}*4}^2}*2}^1 ;(N) axial preak suppression in t1 and echo TROSY selection - IRRELEVANT
+ph17= {{{{3}*4}^2}*2}^3 ;(N) axial preak suppression in t1 and antiecho TROSY selection - IRRELEVANT
+ph9 = {{0}*2}^2		;(N) first ST2PT pulse: CRITICAL to purge F1(15N) phase and artefacts near F2 edges
+ph10= {{3}*2}^2		;(N) second ST2PT pulse: CRITICAL to purge F1(15N) phase and artefacts near F2 edges
+ph19=  0    	    ;(H) first ST2PT pulse, inversion exchanges Ha&Hb and N+&N-
+ph20=  1	 	      ;(H) second ST2PT pulse, inversion exchanges Ha&Hb and N+&N-
+ph31= {{{1 3 3 1}^2}^2}^3
